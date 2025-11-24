@@ -8,6 +8,7 @@ from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
 from lls_dagster_pipeline.utils.data_sequence import create_sequence
 import mlflow.tensorflow
+from tensorflow.keras import Input
 
 
 # MARK: split train test data
@@ -99,12 +100,12 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 	"""
 	context.resources.mlflow  # makes sure resource is initialized
 
-	ltsm_params = context.resources.lstm_config
-
+	lstm_params = context.resources.lstm_config
 	with mlflow.start_run(run_name="lstm_training"):
-		input_shape = (ltsm_params['LSTM_WINDOW_SIZE'], x_train.shape[2])
+		input_shape = (lstm_params['LSTM_WINDOW_SIZE'], x_train.shape[2])
 		model = Sequential()
-		model.add(LSTM(32, input_shape=input_shape, return_sequences=False))
+		model.add(Input(shape=input_shape))
+		model.add(LSTM(32, return_sequences=False))
 		model.add(Dropout(0.2))
 		model.add(Dense(1))
 		model.compile(
@@ -115,20 +116,27 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 
 		early_stop = EarlyStopping(
 			monitor='val_loss',
-			patience=ltsm_params['LSTM_PATIENCE'],
+			patience=lstm_params['LSTM_PATIENCE'],
 			restore_best_weights=True,
 			verbose=1
 		)
 		context.log.info(f"{x_train.shape}")
 		context.log.info(f"{y_train.shape}")
 		context.log.info(f"{x_train.dtype}, {y_train.dtype}")
-		model.fit(
-			x_train[:100], y_train[:100],
-			epochs=ltsm_params['LSTM_EPOCHS'],
-			batch_size=ltsm_params['LSTM_BATCH_SIZE'],
-			validation_split=ltsm_params['validation_split'],
+		history = model.fit(
+			x_train, y_train,
+			epochs=lstm_params['LSTM_EPOCHS'],
+			batch_size=lstm_params['LSTM_BATCH_SIZE'],
+			validation_split=lstm_params['validation_split'],
 			callbacks=[early_stop],
 			verbose=1
 		)
+		mlflow.log_param("epochs", lstm_params['LSTM_EPOCHS'])
+		mlflow.log_metric("final_loss", history.history["loss"][-1])
+
+		# Save the trained model inside MLflow
+		mlflow.tensorflow.log_model(model, artifact_path="model")
+		context.log.info("Model logged to MLflow.")
+
 
 	return model

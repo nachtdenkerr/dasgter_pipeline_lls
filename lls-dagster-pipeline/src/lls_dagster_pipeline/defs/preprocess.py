@@ -68,7 +68,7 @@ def s2_add_vehicle_types(context: dg.AssetExecutionContext, raw_data: pd.DataFra
 	df['Speed'] = df['Speed'].astype('float32')
 	df['Height'] = df['Height'].astype('float32')
 	context.log.info(f"Dataframe shape {df.shape}")
-	context.log.info(f"Unique types: {df["Type"].unique()}")
+	context.log.info(f"Unique types: {df['Type'].unique()}")
 	context.log.info(f"Column names: {df.columns.to_list()}")
 	return df
 

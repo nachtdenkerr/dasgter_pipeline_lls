@@ -49,7 +49,7 @@ def s5_compute_avg_vehicles_in_area(context: dg.AssetExecutionContext, df_active
 		results.append(pivoted)
 	df_group_by_area = pd.concat(results, ignore_index=True)
 	df_group_by_area['Hour'] = df_group_by_area['Timebin'].dt.hour + (df_group_by_area['Timebin'].dt.minute / 60)
-	context.log.info(f'{df_group_by_area['Area'].unique()}')
+	context.log.info(f'{df_group_by_area["Area"].unique()}')
 
 	context.log.info("Dataframe first 5 rows")
 	context.log.info(df_group_by_area.head())
