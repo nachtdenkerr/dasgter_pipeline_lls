@@ -1,0 +1,30 @@
+vehicles:
+  towtruck:
+    - 'f28ba89e'
+    - '541435ba'
+    - 'c0e45e36'
+    - '46f2a9fe'
+
+  electroForklift:
+    - '5a446af4' 
+    - 'a3315a74' 
+    - 'f092e16f' 
+    - 'd6d5bfa3' 
+    - '63ec02d6' 
+    - '39559d5a' 
+    - '06394b06' 
+    - 'd3446ef6'
+
+  dieselForklift:
+    - '13e4e55d' 
+    - '2993457c'
+    - 'ffd43497'
+    - '98c3804e'
+    - 'd88bfaa3'
+    - '8ec4934b'
+    - '713ffecd'
+    - '8ff9320e'
+
+  indoor:
+    - '06394b06' 
+    - 'd3446ef6'

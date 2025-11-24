@@ -143,6 +143,8 @@ def s7_fill_with_zeros(context: dg.AssetExecutionContext, df_pivot_areas: pd.Dat
 def s8_feature_engineering(context: dg.AssetExecutionContext, df_time_sequence) -> pd.DataFrame:
 	context.log.info("Converting hour and weekday to sine and cosine values ...")
 	df = df_time_sequence
+	df['Weekday'] = df['Timebin'].dt.weekday
+
 	df['HourSin'] = np.sin(2 * np.pi * df['Hour'] / 24)
 	df['HourCos'] = np.cos(2 * np.pi * df['Hour'] / 24)
 
@@ -150,4 +152,5 @@ def s8_feature_engineering(context: dg.AssetExecutionContext, df_time_sequence) 
 	df['WeekdayCos'] = np.cos(2 * np.pi * df['Weekday'] / 7)
 	context.log.info(f"Dataframe shape {df.shape}")
 	context.log.info(f"Column names: {df.columns.to_list()}")
+	df.to_csv("5min.csv")
 	return df

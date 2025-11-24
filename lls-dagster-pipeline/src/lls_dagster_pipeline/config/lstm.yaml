@@ -1,0 +1,7 @@
+lstm_params:
+  test_size: 0.2
+  validation_split: 0.3
+  LSTM_WINDOW_SIZE: 60
+  LSTM_EPOCHS: 20
+  LSTM_BATCH_SIZE: 32
+  LSTM_PATIENCE: 10

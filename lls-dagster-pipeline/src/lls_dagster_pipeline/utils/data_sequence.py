@@ -7,7 +7,8 @@ from sklearn.preprocessing import MinMaxScaler
 def create_sequence(context: dg.AssetExecutionContext, df: pd.DataFrame, LSTM_WINDOW_SIZE):
 	all_cols = df.columns.to_list()
 	not_use_cols = ['Timebin', 'Hour', 'Weekday']
-	feature_cols = [col for col in all_cols if col not in not_use_cols]
+	#feature_cols = [col for col in all_cols if col not in not_use_cols]
+	feature_cols = ['HourSin']
 	target_col = ['2A_TotalForklifts']
 	context.log.info(f'Features: {feature_cols}')
 	# Ensure data is sorted by time

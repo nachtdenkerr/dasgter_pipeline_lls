@@ -1,19 +1,20 @@
 import sys
 import pandas as pd
 import dagster as dg
-from dagster import AssetKey, multi_asset, AssetOut
+from dagster import AssetKey, multi_asset, AssetOut, op
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
 from lls_dagster_pipeline.utils.data_sequence import create_sequence
+import mlflow.tensorflow
 
 
 # MARK: split train test data
 @multi_asset(
     outs={
-        "train_set": AssetOut(),
-        "test_set": AssetOut(),
+        "train_set": AssetOut(io_manager_key="parquet_io_manager"),
+        "test_set": AssetOut(io_manager_key="parquet_io_manager"),
     },
 	required_resource_keys={"lstm_config"},
 )
@@ -39,8 +40,8 @@ def s11_split_data(context: dg.AssetExecutionContext, df: pd.DataFrame) :
 # MARK: lstm train sequence
 @dg.multi_asset(
     outs={
-        "x_train": AssetOut(),
-        "y_train": AssetOut(),
+        "x_train": AssetOut(io_manager_key='numpy_io_manager'),
+        "y_train": AssetOut(io_manager_key='numpy_io_manager'),
     },
 	required_resource_keys={"lstm_config"},
 )
@@ -63,8 +64,8 @@ def create_lstm_sequences(context: dg.AssetExecutionContext, train_set: pd.DataF
 # MARK: lstm test sequence
 @dg.multi_asset(
     outs={
-        "x_test": AssetOut(),
-        "y_test": AssetOut(),
+        "x_test": AssetOut(io_manager_key='numpy_io_manager'),
+        "y_test": AssetOut(io_manager_key='numpy_io_manager'),
     },
 	required_resource_keys={"lstm_config"},
 )
@@ -87,7 +88,7 @@ def create_lstm_test_sequences(context: dg.AssetExecutionContext, test_set: pd.D
 # MARK: train LSTM model
 @dg.asset(
 	key=AssetKey(["trained_model"]),
-	required_resource_keys={"lstm_config"},
+	required_resource_keys={"lstm_config", "mlflow"},
 )
 def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 	"""
@@ -96,33 +97,38 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 	X_train, y_train : numpy arrays
 	history : History object
 	"""
+	context.resources.mlflow  # makes sure resource is initialized
+
 	ltsm_params = context.resources.lstm_config
 
-	input_shape = (ltsm_params['LSTM_WINDOW_SIZE'], x_train.shape[2])
-	model = Sequential()
-	model.add(LSTM(32, input_shape=input_shape, return_sequences=False))
-	model.add(Dropout(0.2))
-	model.add(Dense(1))
-	model.compile(
-		optimizer='adam',
-		loss='mse',
-		metrics=['mae']
-	)
+	with mlflow.start_run(run_name="lstm_training"):
+		input_shape = (ltsm_params['LSTM_WINDOW_SIZE'], x_train.shape[2])
+		model = Sequential()
+		model.add(LSTM(32, input_shape=input_shape, return_sequences=False))
+		model.add(Dropout(0.2))
+		model.add(Dense(1))
+		model.compile(
+			optimizer='adam',
+			loss='mse',
+			metrics=['mae']
+		)
 
-	early_stop = EarlyStopping(
-		monitor='val_loss',
-		patience=ltsm_params['LSTM_PATIENCE'],
-		restore_best_weights=True,
-		verbose=1
-	)
-
-	model.fit(
-		x_train[:100], y_train[:100],
-		epochs=ltsm_params['LSTM_EPOCHS'],
-		batch_size=ltsm_params['LSTM_BATCH_SIZE'],
-		validation_split=ltsm_params['validation_split'],
-		callbacks=[early_stop],
-		verbose=1
-	)
+		early_stop = EarlyStopping(
+			monitor='val_loss',
+			patience=ltsm_params['LSTM_PATIENCE'],
+			restore_best_weights=True,
+			verbose=1
+		)
+		context.log.info(f"{x_train.shape}")
+		context.log.info(f"{y_train.shape}")
+		context.log.info(f"{x_train.dtype}, {y_train.dtype}")
+		model.fit(
+			x_train[:100], y_train[:100],
+			epochs=ltsm_params['LSTM_EPOCHS'],
+			batch_size=ltsm_params['LSTM_BATCH_SIZE'],
+			validation_split=ltsm_params['validation_split'],
+			callbacks=[early_stop],
+			verbose=1
+		)
 
 	return model
