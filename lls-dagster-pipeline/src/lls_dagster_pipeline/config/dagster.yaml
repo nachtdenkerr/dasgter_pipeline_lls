@@ -1,0 +1,5 @@
+resources:
+  mlflow:
+    config:
+      experiment_name: "lstm_experiment"
+      tracking_uri: "file:./mlruns"

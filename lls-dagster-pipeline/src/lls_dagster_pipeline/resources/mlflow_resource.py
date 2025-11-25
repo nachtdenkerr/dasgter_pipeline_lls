@@ -1,6 +1,7 @@
 import mlflow
 from dagster import ConfigurableResource
 
+
 class MLflowResource(ConfigurableResource):
     tracking_uri: str
     experiment_name: str = "default"

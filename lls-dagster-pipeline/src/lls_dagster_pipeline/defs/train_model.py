@@ -1,14 +1,14 @@
 import sys
 import pandas as pd
 import dagster as dg
-from dagster import AssetKey, multi_asset, AssetOut, op
+import mlflow.tensorflow
+from dagster import multi_asset, AssetOut
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
-from lls_dagster_pipeline.utils.data_sequence import create_sequence
-import mlflow.tensorflow
 from tensorflow.keras import Input
+from lls_dagster_pipeline.utils.data_sequence import create_sequence
 
 
 # MARK: split train test data
@@ -87,9 +87,13 @@ def create_lstm_test_sequences(context: dg.AssetExecutionContext, test_set: pd.D
 
 
 # MARK: train LSTM model
-@dg.asset(
-	key=AssetKey(["trained_model"]),
-	required_resource_keys={"lstm_config", "mlflow"},
+@dg.multi_asset(
+       outs={
+           "trained_model": AssetOut(),
+           "training_history": AssetOut(),
+       },
+	required_resource_keys={"lstm_config"},
+	can_subset=True,
 )
 def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 	"""
@@ -98,45 +102,37 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 	X_train, y_train : numpy arrays
 	history : History object
 	"""
-	context.resources.mlflow  # makes sure resource is initialized
 
 	lstm_params = context.resources.lstm_config
-	with mlflow.start_run(run_name="lstm_training"):
-		input_shape = (lstm_params['LSTM_WINDOW_SIZE'], x_train.shape[2])
-		model = Sequential()
-		model.add(Input(shape=input_shape))
-		model.add(LSTM(32, return_sequences=False))
-		model.add(Dropout(0.2))
-		model.add(Dense(1))
-		model.compile(
-			optimizer='adam',
-			loss='mse',
-			metrics=['mae']
-		)
+	input_shape = (lstm_params['LSTM_WINDOW_SIZE'], x_train.shape[2])
+	model = Sequential()
+	model.add(Input(shape=input_shape))
+	model.add(LSTM(32, return_sequences=False))
+	model.add(Dropout(0.2))
+	model.add(Dense(1))
+	model.compile(
+		optimizer='adam',
+		loss='mse',
+		metrics=['mae']
+	)
 
-		early_stop = EarlyStopping(
-			monitor='val_loss',
-			patience=lstm_params['LSTM_PATIENCE'],
-			restore_best_weights=True,
-			verbose=1
-		)
-		context.log.info(f"{x_train.shape}")
-		context.log.info(f"{y_train.shape}")
-		context.log.info(f"{x_train.dtype}, {y_train.dtype}")
-		history = model.fit(
-			x_train, y_train,
-			epochs=lstm_params['LSTM_EPOCHS'],
-			batch_size=lstm_params['LSTM_BATCH_SIZE'],
-			validation_split=lstm_params['validation_split'],
-			callbacks=[early_stop],
-			verbose=1
-		)
-		mlflow.log_param("epochs", lstm_params['LSTM_EPOCHS'])
-		mlflow.log_metric("final_loss", history.history["loss"][-1])
+	early_stop = EarlyStopping(
+		monitor='val_loss',
+		patience=lstm_params['LSTM_PATIENCE'],
+		restore_best_weights=True,
+		verbose=1
+	)
+	context.log.info(f"{x_train.shape}")
+	context.log.info(f"{y_train.shape}")
+	context.log.info(f"{x_train.dtype}, {y_train.dtype}")
+	history = model.fit(
+		x_train, y_train,
+		epochs=lstm_params['LSTM_EPOCHS'],
+		batch_size=lstm_params['LSTM_BATCH_SIZE'],
+		validation_split=lstm_params['validation_split'],
+		callbacks=[early_stop],
+		verbose=1
+	)
+	context.log.info(f"Training completed. Final loss: {history.history['loss'][-1]:.4f}")
 
-		# Save the trained model inside MLflow
-		mlflow.tensorflow.log_model(model, artifact_path="model")
-		context.log.info("Model logged to MLflow.")
-
-
-	return model
+	return model, history

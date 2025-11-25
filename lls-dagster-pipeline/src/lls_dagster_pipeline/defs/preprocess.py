@@ -1,38 +1,71 @@
 import os
+import shutil
 import numpy as np
 import pandas as pd
 import dagster as dg
 from dagster import AssetKey
 
-DATASET_DIR = "data/"
+DATASET_DIR = "data/incoming"
+
+#@dg.asset(config_schema={"batch_name": str})
+#def load_batch(context):
+#    batch_name = context.op_config["batch_name"]
+#    batch_dir = os.path.join(DATASET_DIR, batch_name)
+
+#    data_frames = []
+
+#    for f in os.listdir(batch_dir):
+#        if f.endswith(".csv"):
+#            df = pd.read_csv(os.path.join(batch_dir, f))
+#            data_frames.append(df)
+
+#    context.log.info(f"Loaded {len(data_frames)} CSVs from batch {batch_name}")
+    
+#    # Return a merged dataframe or a dict of per-vehicle dfs
+#    return pd.concat(data_frames, ignore_index=True)
+
+
+@dg.asset(
+	group_name='preprocess',
+	config_schema={"batch_name": str},   # <-- this is the correct way for assets
+)
+def archive_batch(context: dg.AssetExecutionContext, raw_data):
+    batch_name = context.op_config["batch_name"]
+    src = f"data/incoming/{batch_name}"
+    dst = f"data/processed/{batch_name}"
+    shutil.move(src, dst)
+    context.log.info(f"Moved {batch_name} to processed/")
+
+HEADERS = ['FFID', 'Height', 'Loaded', 'OnDuty', 'TimeStamp', 'Latitude', 'Longitude', 'Speed']
+
 
 # MARK:read csv
 @dg.asset(
 	io_manager_key="parquet_io_manager",
 	key=AssetKey(["raw_data"]),
 	group_name='preprocess',
+	config_schema={"batch_name": str}
 )
 def s1_read_csv(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 	"""
 	Read .csv file from DATASET_DIR
 	"""
-	context.log.info("Reading CSV file...")
-	# Read data from the CSV
-	HEADERS = ['FFID', 'Height', 'Loaded', 'OnDuty', 'TimeStamp', 'Latitude', 'Longitude', 'Speed']
+	batch_name = context.op_config["batch_name"]
+	batch_dir = os.path.join(DATASET_DIR, batch_name)
+
+	context.log.info(f"Reading CSV files from batch: {batch_name}")
 
 	dataframes = []
-	for file in os.listdir(DATASET_DIR):
+	for file in os.listdir(batch_dir):
 		if file.endswith(".csv"):
-			file_path = os.path.join(DATASET_DIR, file)
-
+			file_path = os.path.join(batch_dir, file)
 			# Read CSV and assign headers
 			df = pd.read_csv(file_path, names=HEADERS, header=None, sep=";")
-
 			# Use filename (without extension) as key
 			dataframes.append(df)
 	df = pd.concat(dataframes, ignore_index=True)
 
-	context.log.info(f"Read {len(dataframes)} CSV files.")
+	context.log.info(f"Read {len(dataframes)} CSV files from batch {batch_name}..")
 	context.log.info(f"Dataframe shape {df.shape}")
 	context.log.info(f"Column names: {df.columns.to_list()}")
 	return df
