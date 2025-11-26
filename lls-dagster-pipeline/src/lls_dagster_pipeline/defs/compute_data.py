@@ -3,6 +3,7 @@ import pandas as pd
 import dagster as dg
 from dagster import AssetKey
 from shapely.geometry import Point
+import holidays
 
 
 # MARK:compute vehicles in area
@@ -149,7 +150,16 @@ def s8_feature_engineering(context: dg.AssetExecutionContext, df_time_sequence) 
 
 	df['WeekdaySin'] = np.sin(2 * np.pi * df['Weekday'] / 7)
 	df['WeekdayCos'] = np.cos(2 * np.pi * df['Weekday'] / 7)
+	df["IsWeekend"] = df["Weekday"].isin([5, 6]).astype(int)
+	de_holidays = holidays.Germany()
+
+	df["IsHoliday"] = df["Timebin"].dt.date.astype("datetime64[ns]").isin(de_holidays).astype(int)
+	df['IsWorkingHour'] = df['Hour'].between(6, 16).astype(int)
+
+	#for lag in [1, 6, 12, 36]:
+	#	df[f"forklift_lag_{lag}"] = df["2A_TotalForklifts"].shift(lag)
+	#df = df.dropna().reset_index(drop=True)
 	context.log.info(f"Dataframe shape {df.shape}")
 	context.log.info(f"Column names: {df.columns.to_list()}")
-	df.to_csv("5min.csv")
+	#df.to_csv("5min_with_holiday_lag.csv")
 	return df

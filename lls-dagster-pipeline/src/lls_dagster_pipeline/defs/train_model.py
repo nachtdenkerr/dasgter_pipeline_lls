@@ -1,16 +1,16 @@
 import sys
 import pandas as pd
 import dagster as dg
-import mlflow.tensorflow
 from dagster import multi_asset, AssetOut
+from tensorflow.keras import Input
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
-from tensorflow.keras import Input
 from lls_dagster_pipeline.utils.data_sequence import create_sequence
-from lls_dagster_pipeline.resources.lstm_config import lstm_config_resource
-
+import numpy as np
+import tensorflow as tf
+import random
 
 # MARK: split train test data
 @multi_asset(
@@ -81,6 +81,26 @@ def create_lstm_test_sequences(context: dg.AssetExecutionContext, test_set: pd.D
 	return create_sequence(context=context, df=test_set)
 
 
+#def build_model(hp):
+#    model = Sequential()
+    
+#    # Number of units in first layer
+#    units = hp.Int("units", min_value=32, max_value=128, step=32)
+#    model.add(LSTM(units, return_sequences=True))
+
+#    # Optional second layer
+#    if hp.Boolean("use_second_layer"):
+#        units2 = hp.Int("units2", min_value=32, max_value=128, step=32)
+#        model.add(LSTM(units2))
+
+#    model.add(Dense(16, activation="relu"))
+#    model.add(Dense(1))
+
+#    lr = hp.Choice("learning_rate", [1e-2, 3e-3, 1e-3, 3e-4, 1e-4])
+#    model.compile(optimizer=optimizers.Adam(lr), loss="mse")
+#    return model
+
+
 # MARK: train LSTM model
 @dg.multi_asset(
        outs={
@@ -97,6 +117,9 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 	X_train, y_train : numpy arrays
 	history : History object
 	"""
+	random.seed(42)
+	np.random.seed(42)
+	tf.random.set_seed(42)
 
 	lstm_params = context.resources.lstm_config
 	input_shape = (lstm_params['LSTM_WINDOW_SIZE'], x_train.shape[2])
@@ -132,9 +155,9 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 		callbacks=[early_stop],
 		verbose=1
 	)
-	#checkpoint_path = "models/best_model.keras"
-	#checkpoint = ModelCheckpoint(checkpoint_path, save_best_only=True, monitor="val_loss")
-	
+
+	model.save('models/latest_model.keras')  # The file needs to end with the .keras extension
+
 	context.log.info(f"Training completed. Final loss: {history.history['loss'][-1]:.4f}")
 
 	return model, history

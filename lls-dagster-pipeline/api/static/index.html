@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Forklift Prediction</title>
+</head>
+<body>
+    <h1>Forklift Prediction</h1>
+
+    <form id="predict-form">
+        <label for="date">Date:</label>
+        <input type="date" id="date" name="date" required><br><br>
+
+        <label for="time">Time:</label>
+        <input type="time" id="time" name="time" required><br><br>
+
+        <label for="area">Area:</label>
+        <select id="area" name="area">
+            <option value="Tor2">Tor2</option>
+            <option value="2A">2A</option>
+            <option value="2B">2B</option>
+            <!-- add more areas as needed -->
+        </select><br><br>
+
+        <button type="submit">Predict</button>
+    </form>
+
+    <h2 id="result"></h2>
+
+    <script>
+        const form = document.getElementById('predict-form');
+        const resultElem = document.getElementById('result');
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault(); // prevent page reload
+
+            // Get values from the form
+            const date = document.getElementById('date').value;
+            const time = document.getElementById('time').value;
+            const area = document.getElementById('area').value;
+
+            // Convert date and time to your model input (example: Timebin, Hour, Weekday, sin/cos features)
+            const dt = new Date(`${date}T${time}`);
+            const hour = dt.getHours() + dt.getMinutes() / 60;
+            const weekday = dt.getDay(); // 0=Sunday ... 6=Saturday
+            const is_weekend = (weekday === 0 || weekday === 6) ? 1 : 0;
+            const hour_sin = Math.sin(2 * Math.PI * hour / 24);
+            const hour_cos = Math.cos(2 * Math.PI * hour / 24);
+            const weekday_sin = Math.sin(2 * Math.PI * weekday / 7);
+            const weekday_cos = Math.cos(2 * Math.PI * weekday / 7);
+
+            // Example: area one-hot encoding
+            const areas = ["Tor2", "2A", "2B"]; // list all areas in model
+            const area_features = areas.map(a => (a === area ? 1 : 0));
+
+            // Build the flattened feature array
+            const features = [hour, weekday, is_weekend, hour_sin, hour_cos, weekday_sin, weekday_cos, ...area_features];
+
+            // Call the API
+            const response = await fetch("/predict", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({date: date, time: time, area: area})
+            });
+
+            const data = await response.json();
+            resultElem.textContent = `Predicted Active Forklifts: ${data.prediction.toFixed(1)}`;
+        });
+    </script>
+
+</body>
+</html>

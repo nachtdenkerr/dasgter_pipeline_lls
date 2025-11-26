@@ -5,6 +5,7 @@ version = "0.1.0"
 dependencies = [
     "dagster==1.12.2",
     "fastapi[standard]>=0.121.2",
+    "holidays>=0.85",
     "joblib>=1.5.2",
     "matplotlib>=3.10.7",
     "mlflow>=3.6.0",

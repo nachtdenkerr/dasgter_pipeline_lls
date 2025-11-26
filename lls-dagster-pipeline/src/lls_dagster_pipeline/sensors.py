@@ -35,8 +35,8 @@ def new_batch_sensor(context):
     new_batches = [b for b in batches if b > last_processed]
 
     if not new_batches:
-        context.log.debug("No new batch found.")
-        yield SkipReason("No new batch found in data/incoming.")
+        #context.log.debug("No new batch found.")
+        #yield SkipReason("No new batch found in data/incoming.")
         return
 
     # take first new batch (oldest unprocessed)

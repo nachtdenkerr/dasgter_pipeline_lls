@@ -1,12 +1,15 @@
 import sys
+import joblib
 import mlflow
 import numpy as np
 import dagster as dg
+from mlflow import MlflowException
 from mlflow.models import infer_signature
 from mlflow.entities import model_registry
+from mlflow.tracking import MlflowClient
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-from lls_dagster_pipeline.utils.visualization import plot_predict_vs_test
-import joblib
+from lls_dagster_pipeline.utils.visualization import plot_predict_vs_test, plot_predict_vs_test_last_5th_day
+#from tensorflow.keras.models import model_to_json
 
 @dg.asset(
 	required_resource_keys={"lstm_config", "mlflow"},
@@ -18,7 +21,7 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 	"""
 	context.resources.mlflow  # ensure resource is initialized
 	lstm_params = context.resources.lstm_config	
-	with mlflow.start_run(run_name="lstm_evaluation"):
+	with mlflow.start_run(run_name="lstm_evaluation") as run:
 		context.log.info("Starting MLflow run for model evaluation...")
 		mlflow.log_param("lstm_window_size", lstm_params['LSTM_WINDOW_SIZE'])
 		mlflow.log_param("epochs", lstm_params['LSTM_EPOCHS'])
@@ -28,7 +31,6 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		mlflow.log_param("test_size", lstm_params['test_size'])
 		scaler_X = joblib.load("models/scaler_X.pkl")
 		scaler_y = joblib.load("models/scaler_y.pkl")
-		#model_registry.ModelVersion(description=f"Winfow")
 		# 2. Log training history metrics
 		if hasattr(training_history, 'history'):
 			# Log final training metrics
@@ -49,8 +51,10 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		y_pred_train = trained_model.predict(x_train)
 		y_pred_test = trained_model.predict(x_test)
 		y_pred_real_train = scaler_y.inverse_transform(y_pred_train)
+		y_pred_real_train_rounded = np.round(y_pred_real_train).astype(int)
 		y_pred_real_test = scaler_y.inverse_transform(y_pred_test)
-		
+		y_pred_real_test_rounded = np.round(y_pred_real_test).astype(int)
+
 		y_test_real = scaler_y.inverse_transform(y_test)
 
 		# Clip negative predictions to 0 (can't have negative equipment count)
@@ -58,14 +62,14 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		y_pred_test = np.clip(y_pred_test, 0, None)
 
 		# Calculate evaluation metrics
-		train_mae = mean_absolute_error(y_train, y_pred_train)
-		train_rmse = np.sqrt(mean_squared_error(y_train, y_pred_train))
-		train_r2 = r2_score(y_train, y_pred_train)
+		train_mae = mean_absolute_error(y_train, y_pred_real_train_rounded)
+		train_rmse = np.sqrt(mean_squared_error(y_train, y_pred_real_train_rounded))
+		train_r2 = r2_score(y_train, y_pred_real_train_rounded)
 		#train_da = calculate_direction_accuracy(y_train, y_pred_train)
 
-		test_mae = mean_absolute_error(y_test_real, y_pred_real_test)
-		test_rmse = np.sqrt(mean_squared_error(y_test_real, y_pred_real_test))
-		test_r2 = r2_score(y_test_real, y_pred_real_test)
+		test_mae = mean_absolute_error(y_test_real, y_pred_real_test_rounded)
+		test_rmse = np.sqrt(mean_squared_error(y_test_real, y_pred_real_test_rounded))
+		test_r2 = r2_score(y_test_real, y_pred_real_test_rounded)
 		#test_da = calculate_direction_accuracy(y_test, y_pred_test)
 
 		# 5. Log evaluation metrics to MLflow
@@ -79,7 +83,26 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		#mlflow.log_metric("test_direction_accuracy", test_da)
 
 		# 6. Log the trained model
-		mlflow.tensorflow.log_model(trained_model, artifact_path="model")
+		mlflow.tensorflow.log_model(
+			trained_model, 
+			name="model", 
+			input_example=x_test[:1],
+		)
+		run_id = run.info.run_id
+		model_uri = f"runs:/{run_id}/model"  # points to the logged model
+
+		try:
+			result = mlflow.register_model(model_uri, "forklift-lstm")
+			print(f"Model registered: {result.name}, version: {result.version}")
+		except MlflowException as e:
+			print(f"Failed to register model: {e}")
+		client = MlflowClient()
+		client.transition_model_version_stage(
+			name="forklift-lstm",
+			version=result.version,
+			stage="Production",
+			archive_existing_versions=True  # optional: archive old prod versions
+		)
 		context.log.info("Model logged to MLflow.")
 
 		# 7. Log to console
@@ -107,17 +130,16 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		#sys.stdout.write(f"Test Direction Accuracy: {test_da:.4f} ({test_da*100:.2f}%)\n")
 
 		#signature = infer_signature(x_test, y_pred_test)
-
-		#mlflow.tensorflow.log_model(
-		#	trained_model,
-		#	artifact_path="lstm_model",
-		#	signature=signature,
-		#)
+		model_json = trained_model.to_json()
+		#model_json = model.to_json()
+		with open("models/json_model.json", "w") as json_file:
+			json_file.write(model_json)
+		trained_model.save_weights("models/json_model.weights.h5")
 		# create plot
-		plot_path = plot_predict_vs_test(y_pred_real_test, x_test, y_test_real)
-
+		plot_path = plot_predict_vs_test(y_pred_real_test_rounded, x_test, y_test_real)
+		day_plot_path = plot_predict_vs_test_last_5th_day(y_pred_real_test_rounded, x_test, y_test_real)
 		# log to MLflow
-		mlflow.log_artifact(plot_path, artifact_path="plots/predict_vs_real.png")
+		mlflow.log_artifact(plot_path, artifact_path="plots/")
 
 		context.log.info(f"Saved prediction plot to {plot_path}")
 
