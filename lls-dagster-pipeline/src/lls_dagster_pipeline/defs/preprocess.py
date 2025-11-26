@@ -7,23 +7,6 @@ from dagster import AssetKey
 
 DATASET_DIR = "data/incoming"
 
-#@dg.asset(config_schema={"batch_name": str})
-#def load_batch(context):
-#    batch_name = context.op_config["batch_name"]
-#    batch_dir = os.path.join(DATASET_DIR, batch_name)
-
-#    data_frames = []
-
-#    for f in os.listdir(batch_dir):
-#        if f.endswith(".csv"):
-#            df = pd.read_csv(os.path.join(batch_dir, f))
-#            data_frames.append(df)
-
-#    context.log.info(f"Loaded {len(data_frames)} CSVs from batch {batch_name}")
-    
-#    # Return a merged dataframe or a dict of per-vehicle dfs
-#    return pd.concat(data_frames, ignore_index=True)
-
 
 @dg.asset(
 	group_name='preprocess',

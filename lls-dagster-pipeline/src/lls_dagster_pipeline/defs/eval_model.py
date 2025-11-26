@@ -3,8 +3,10 @@ import mlflow
 import numpy as np
 import dagster as dg
 from mlflow.models import infer_signature
+from mlflow.entities import model_registry
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-
+from lls_dagster_pipeline.utils.visualization import plot_predict_vs_test
+import joblib
 
 @dg.asset(
 	required_resource_keys={"lstm_config", "mlflow"},
@@ -24,7 +26,9 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		mlflow.log_param("patience", lstm_params['LSTM_PATIENCE'])
 		mlflow.log_param("validation_split", lstm_params['validation_split'])
 		mlflow.log_param("test_size", lstm_params['test_size'])
-
+		scaler_X = joblib.load("models/scaler_X.pkl")
+		scaler_y = joblib.load("models/scaler_y.pkl")
+		#model_registry.ModelVersion(description=f"Winfow")
 		# 2. Log training history metrics
 		if hasattr(training_history, 'history'):
 			# Log final training metrics
@@ -44,6 +48,10 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		# 3. Make predictions
 		y_pred_train = trained_model.predict(x_train)
 		y_pred_test = trained_model.predict(x_test)
+		y_pred_real_train = scaler_y.inverse_transform(y_pred_train)
+		y_pred_real_test = scaler_y.inverse_transform(y_pred_test)
+		
+		y_test_real = scaler_y.inverse_transform(y_test)
 
 		# Clip negative predictions to 0 (can't have negative equipment count)
 		y_pred_train = np.clip(y_pred_train, 0, None)
@@ -55,9 +63,9 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		train_r2 = r2_score(y_train, y_pred_train)
 		#train_da = calculate_direction_accuracy(y_train, y_pred_train)
 
-		test_mae = mean_absolute_error(y_test, y_pred_test)
-		test_rmse = np.sqrt(mean_squared_error(y_test, y_pred_test))
-		test_r2 = r2_score(y_test, y_pred_test)
+		test_mae = mean_absolute_error(y_test_real, y_pred_real_test)
+		test_rmse = np.sqrt(mean_squared_error(y_test_real, y_pred_real_test))
+		test_r2 = r2_score(y_test_real, y_pred_real_test)
 		#test_da = calculate_direction_accuracy(y_test, y_pred_test)
 
 		# 5. Log evaluation metrics to MLflow
@@ -105,4 +113,12 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		#	artifact_path="lstm_model",
 		#	signature=signature,
 		#)
+		# create plot
+		plot_path = plot_predict_vs_test(y_pred_real_test, x_test, y_test_real)
+
+		# log to MLflow
+		mlflow.log_artifact(plot_path, artifact_path="plots/predict_vs_real.png")
+
+		context.log.info(f"Saved prediction plot to {plot_path}")
+
 	context.log.info("MLflow run completed successfully.")

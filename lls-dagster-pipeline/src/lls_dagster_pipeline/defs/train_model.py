@@ -9,6 +9,7 @@ from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
 from tensorflow.keras import Input
 from lls_dagster_pipeline.utils.data_sequence import create_sequence
+from lls_dagster_pipeline.resources.lstm_config import lstm_config_resource
 
 
 # MARK: split train test data
@@ -56,10 +57,7 @@ def create_lstm_sequences(context: dg.AssetExecutionContext, train_set: pd.DataF
 	y : np.ndarray
 		Array of shape (num_sequences,)
 	"""
-	ltsm_patams = context.resources.lstm_config
-	LSTM_WINDOW_SIZE = ltsm_patams['LSTM_WINDOW_SIZE']
-
-	return create_sequence(context=context, df=train_set, LSTM_WINDOW_SIZE=LSTM_WINDOW_SIZE)
+	return create_sequence(context=context, df=train_set)
 
 
 # MARK: lstm test sequence
@@ -80,10 +78,7 @@ def create_lstm_test_sequences(context: dg.AssetExecutionContext, test_set: pd.D
 	y : np.ndarray
 		Array of shape (num_sequences,)
 	"""
-	ltsm_params = context.resources.lstm_config
-	LSTM_WINDOW_SIZE = ltsm_params['LSTM_WINDOW_SIZE']
-
-	return create_sequence(context=context, df=test_set, LSTM_WINDOW_SIZE=LSTM_WINDOW_SIZE)
+	return create_sequence(context=context, df=test_set)
 
 
 # MARK: train LSTM model
@@ -107,9 +102,13 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 	input_shape = (lstm_params['LSTM_WINDOW_SIZE'], x_train.shape[2])
 	model = Sequential()
 	model.add(Input(shape=input_shape))
+	model.add(LSTM(64, return_sequences=True))
+	model.add(Dropout(0.2))
 	model.add(LSTM(32, return_sequences=False))
 	model.add(Dropout(0.2))
+	model.add(Dense(16, activation="relu"))
 	model.add(Dense(1))
+
 	model.compile(
 		optimizer='adam',
 		loss='mse',
@@ -133,6 +132,9 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 		callbacks=[early_stop],
 		verbose=1
 	)
+	#checkpoint_path = "models/best_model.keras"
+	#checkpoint = ModelCheckpoint(checkpoint_path, save_best_only=True, monitor="val_loss")
+	
 	context.log.info(f"Training completed. Final loss: {history.history['loss'][-1]:.4f}")
 
 	return model, history

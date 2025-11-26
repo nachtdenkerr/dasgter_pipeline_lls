@@ -63,7 +63,6 @@ def s5_compute_avg_vehicles_in_area(context: dg.AssetExecutionContext, df_active
 	io_manager_key='parquet_io_manager',
 	key=AssetKey('df_pivot_areas'),
 	group_name='compute',
-
 )
 def s6_pivot_areas(context: dg.AssetExecutionContext, df_num_forklifts: pd.DataFrame) -> pd.DataFrame:
 	context.log.info("Creating new columns based on area and vehicle types ...")
