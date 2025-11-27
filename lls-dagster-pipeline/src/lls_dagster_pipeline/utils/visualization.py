@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+import sys
 
 def extract_single_output(y_pred):
     # If prediction is 3D, take last time step
@@ -10,7 +11,7 @@ def extract_single_output(y_pred):
         y_pred = y_pred[:, 0]
     return y_pred
 
-def plot_predict_vs_test(y_pred, x_test, y_test):
+def plot_predict_vs_test(y_pred, y_test):
     # Getting final test predictions
     out_path = "plots/predict_vs_real.png"
         # ---- Build a time index (5-minute intervals) ----
@@ -40,39 +41,56 @@ def plot_predict_vs_test(y_pred, x_test, y_test):
     return out_path
 
 
-def plot_predict_vs_test_last_5th_day(y_pred, x_test, y_test):
+def plot_predict_vs_test_last_5th_day(y_pred, y_test_real, x_test_real, hour_col_index):
     out_path = "plots/predict_vs_real_5th_day.png"
-    
-    # Ensure correct shape
-    y_pred = extract_single_output(y_pred)
-    
-    # ---- Compute slice for exactly 1 day (5th last) ----
-    POINTS_PER_DAY = 288  # 24 hours * 12 samples/hour (5 min)
-    
-    start_idx = -5 * POINTS_PER_DAY
-    end_idx   = -4 * POINTS_PER_DAY  # one full day slice
 
-    y_test_day = y_test[start_idx:end_idx]
+    # ---- 1) Clean 1D arrays ----
+    y_pred = extract_single_output(y_pred).reshape(-1)
+    y_real = extract_single_output(y_test_real).reshape(-1)
+
+    # ---- 2) Extract hour from x_test_real ----
+    # x_test_real shape: (N, window_size, num_features)
+    # hour for each prediction = last timestep of window
+    hours = x_test_real[hour_col_index].astype(int)
+
+    # ---- 3) Find day boundaries (23 → 0 transition) ----
+    day_starts = []
+    for i in range(len(hours)):
+        if hours[i] == 0 and (i == 0 or hours[i - 1] == 23):
+            day_starts.append(i)
+
+    if len(day_starts) < 5:
+        raise ValueError(f"Expected >=5 full days, found only {len(day_starts)}")
+
+    # 5th last day start
+    start_idx = day_starts[-5]
+
+    # End at next day start, or end of data
+    end_idx = day_starts[-4] if len(day_starts) >= 4 else len(hours)
+
+    # ---- 4) Slice data for that day ----
+    y_real_day = y_real[start_idx:end_idx]
     y_pred_day = y_pred[start_idx:end_idx]
 
-    # ---- Build time index for only that day ----
+    # ---- 5) Build real time-of-day axis from hour + 5min steps ----
+    # construct timedelta from first hour value
+    start_hour = int(hours[start_idx])
     time_index = pd.date_range(
-        start="2024-01-05 00:00:00",  # this is arbitrary, only for plotting
-        periods=len(y_test_day),
+        start=f"2024-01-01 {start_hour:02d}:00:00",
+        periods=len(y_real_day),
         freq="5min"
     )
 
-    # ---- Plot ----
+    # ---- 6) Plot ----
     plt.figure(figsize=(15, 6))
-    plt.plot(time_index, y_test_day, label="Real (5th last day)", linewidth=2)
-    plt.plot(time_index, y_pred_day, '--', label="Predicted", linewidth=2)
+    plt.plot(time_index, y_real_day, label="Real (5th last day)", linewidth=2)
+    plt.plot(time_index, y_pred_day, "--", label="Predicted", linewidth=2)
 
-    plt.xlabel("Time", fontsize=12)
-    plt.ylabel("Target Value", fontsize=12)
-    plt.title("Real vs Predicted – 5th Last Day", fontsize=14)
+    plt.xlabel("Time")
+    plt.ylabel("Target")
+    plt.title("Real vs Predicted – 5th Last Day")
     plt.legend()
     plt.grid(alpha=0.3)
-    
     plt.tight_layout()
     plt.savefig(out_path, dpi=150)
     plt.close()

@@ -154,11 +154,12 @@ def s8_feature_engineering(context: dg.AssetExecutionContext, df_time_sequence) 
 	de_holidays = holidays.Germany()
 
 	df["IsHoliday"] = df["Timebin"].dt.date.astype("datetime64[ns]").isin(de_holidays).astype(int)
-	df['IsWorkingHour'] = df['Hour'].between(6, 16).astype(int)
-
-	#for lag in [1, 6, 12, 36]:
-	#	df[f"forklift_lag_{lag}"] = df["2A_TotalForklifts"].shift(lag)
-	#df = df.dropna().reset_index(drop=True)
+	df["IsWorkingHour"] = (
+		df["Hour"].between(5, 17) & ~df["Hour"].isin([9, 12])
+	).astype(int)
+	for lag in [1, 6, 12, 36]:
+		df[f"forklift_lag_{lag}"] = df["2A_TotalForklifts"].shift(lag)
+	df = df.dropna().reset_index(drop=True)
 	context.log.info(f"Dataframe shape {df.shape}")
 	context.log.info(f"Column names: {df.columns.to_list()}")
 	#df.to_csv("5min_with_holiday_lag.csv")

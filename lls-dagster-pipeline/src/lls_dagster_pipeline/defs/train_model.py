@@ -1,16 +1,20 @@
 import sys
+import random
+import joblib
+import numpy as np
 import pandas as pd
 import dagster as dg
+import tensorflow as tf
+
 from dagster import multi_asset, AssetOut
+from tensorflow import keras
 from tensorflow.keras import Input
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
 from lls_dagster_pipeline.utils.data_sequence import create_sequence
-import numpy as np
-import tensorflow as tf
-import random
+from sklearn.preprocessing import StandardScaler
 
 # MARK: split train test data
 @multi_asset(
@@ -38,6 +42,27 @@ def s11_split_data(context: dg.AssetExecutionContext, df: pd.DataFrame) :
 	context.log.info(f'Train data shape: {train_val.shape}, test data shape {test.shape}')
 	return train_val, test
 
+@dg.multi_asset(
+    outs={
+        "scaler_X": AssetOut(),
+        "scaler_y": AssetOut(),
+    },
+	required_resource_keys={"lstm_config"},
+)
+def fit_scalers(train_set: pd.DataFrame):
+    all_cols = train_set.columns.to_list()
+    not_use_cols = ['Timebin', 'Hour', 'Weekday']
+    feature_cols = [c for c in all_cols if c not in not_use_cols]
+    target_col = ['2A_TotalForklifts']
+
+    scaler_X = StandardScaler().fit(train_set[feature_cols])
+    scaler_y = StandardScaler().fit(train_set[target_col])
+
+    joblib.dump(scaler_X, "models/scaler_X.pkl")
+    joblib.dump(scaler_y, "models/scaler_y.pkl")
+
+    return scaler_X, scaler_y
+
 
 # MARK: lstm train sequence
 @dg.multi_asset(
@@ -47,7 +72,7 @@ def s11_split_data(context: dg.AssetExecutionContext, df: pd.DataFrame) :
     },
 	required_resource_keys={"lstm_config"},
 )
-def create_lstm_sequences(context: dg.AssetExecutionContext, train_set: pd.DataFrame):
+def create_lstm_sequences(context: dg.AssetExecutionContext, train_set: pd.DataFrame, scaler_X, scaler_y):
 	"""
 	Convert dataframe into sequences for LSTM.
 	Input: df -> pd.DataFrame - Input dataframe sorted by time.
@@ -57,7 +82,7 @@ def create_lstm_sequences(context: dg.AssetExecutionContext, train_set: pd.DataF
 	y : np.ndarray
 		Array of shape (num_sequences,)
 	"""
-	return create_sequence(context=context, df=train_set)
+	return create_sequence(context, train_set, scaler_X, scaler_y)
 
 
 # MARK: lstm test sequence
@@ -68,7 +93,7 @@ def create_lstm_sequences(context: dg.AssetExecutionContext, train_set: pd.DataF
     },
 	required_resource_keys={"lstm_config"},
 )
-def create_lstm_test_sequences(context: dg.AssetExecutionContext, test_set: pd.DataFrame):
+def create_lstm_test_sequences(context: dg.AssetExecutionContext, test_set: pd.DataFrame, scaler_X, scaler_y):
 	"""
 	Convert dataframe into sequences for LSTM.
 	Input: df -> pd.DataFrame - Input dataframe sorted by time.
@@ -78,28 +103,16 @@ def create_lstm_test_sequences(context: dg.AssetExecutionContext, test_set: pd.D
 	y : np.ndarray
 		Array of shape (num_sequences,)
 	"""
-	return create_sequence(context=context, df=test_set)
+	return create_sequence(context, test_set,  scaler_X, scaler_y)
 
+@keras.saving.register_keras_serializable()
+def weighted_mse(y_true, y_pred):
+    diff = y_pred - y_true
+    under_mask = tf.cast(diff < 0, tf.float32)
 
-#def build_model(hp):
-#    model = Sequential()
-    
-#    # Number of units in first layer
-#    units = hp.Int("units", min_value=32, max_value=128, step=32)
-#    model.add(LSTM(units, return_sequences=True))
-
-#    # Optional second layer
-#    if hp.Boolean("use_second_layer"):
-#        units2 = hp.Int("units2", min_value=32, max_value=128, step=32)
-#        model.add(LSTM(units2))
-
-#    model.add(Dense(16, activation="relu"))
-#    model.add(Dense(1))
-
-#    lr = hp.Choice("learning_rate", [1e-2, 3e-3, 1e-3, 3e-4, 1e-4])
-#    model.compile(optimizer=optimizers.Adam(lr), loss="mse")
-#    return model
-
+    return tf.reduce_mean(
+        tf.square(diff) * (1 + under_mask * 2.0)        # 2× penalty for underprediction
+    )
 
 # MARK: train LSTM model
 @dg.multi_asset(
@@ -134,8 +147,7 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 
 	model.compile(
 		optimizer='adam',
-		loss='mse',
-		metrics=['mae']
+		loss=weighted_mse,
 	)
 
 	early_stop = EarlyStopping(

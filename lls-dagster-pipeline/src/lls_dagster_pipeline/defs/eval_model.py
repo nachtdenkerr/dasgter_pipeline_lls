@@ -1,6 +1,7 @@
 import sys
 import joblib
 import mlflow
+import pandas as pd
 import numpy as np
 import dagster as dg
 from mlflow import MlflowException
@@ -49,27 +50,30 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 			
 		# 3. Make predictions
 		y_pred_train = trained_model.predict(x_train)
-		y_pred_test = trained_model.predict(x_test)
-		y_pred_real_train = scaler_y.inverse_transform(y_pred_train)
-		y_pred_real_train_rounded = np.round(y_pred_real_train).astype(int)
-		y_pred_real_test = scaler_y.inverse_transform(y_pred_test)
-		y_pred_real_test_rounded = np.round(y_pred_real_test).astype(int)
+		y_pred_test  = trained_model.predict(x_test)
+
+		y_pred_train_real = scaler_y.inverse_transform(y_pred_train)
+		y_pred_test_real  = scaler_y.inverse_transform(y_pred_test)
+
+		y_pred_train_round = np.rint(np.clip(y_pred_train_real, 0, None)).astype(int)
+		y_pred_test_round  = np.rint(np.clip(y_pred_test_real,  0, None)).astype(int)
 
 		y_test_real = scaler_y.inverse_transform(y_test)
+		y_test_real_round = np.rint(np.clip(y_test_real, 0, None)).astype(int)
 
 		# Clip negative predictions to 0 (can't have negative equipment count)
 		y_pred_train = np.clip(y_pred_train, 0, None)
 		y_pred_test = np.clip(y_pred_test, 0, None)
 
 		# Calculate evaluation metrics
-		train_mae = mean_absolute_error(y_train, y_pred_real_train_rounded)
-		train_rmse = np.sqrt(mean_squared_error(y_train, y_pred_real_train_rounded))
-		train_r2 = r2_score(y_train, y_pred_real_train_rounded)
+		train_mae = mean_absolute_error(y_train, y_pred_train_round)
+		train_rmse = np.sqrt(mean_squared_error(y_train, y_pred_train_round))
+		train_r2 = r2_score(y_train, y_pred_train_round)
 		#train_da = calculate_direction_accuracy(y_train, y_pred_train)
 
-		test_mae = mean_absolute_error(y_test_real, y_pred_real_test_rounded)
-		test_rmse = np.sqrt(mean_squared_error(y_test_real, y_pred_real_test_rounded))
-		test_r2 = r2_score(y_test_real, y_pred_real_test_rounded)
+		test_mae = mean_absolute_error(y_test_real, y_pred_test_round)
+		test_rmse = np.sqrt(mean_squared_error(y_test_real, y_pred_test_round))
+		test_r2 = r2_score(y_test_real, y_pred_test_round)
 		#test_da = calculate_direction_accuracy(y_test, y_pred_test)
 
 		# 5. Log evaluation metrics to MLflow
@@ -128,18 +132,28 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		sys.stdout.write(f"Test RMSE: {test_rmse:.4f}\n")
 		sys.stdout.write(f"Test R2: {test_r2:.4f}\n")
 		#sys.stdout.write(f"Test Direction Accuracy: {test_da:.4f} ({test_da*100:.2f}%)\n")
+		plot_path = plot_predict_vs_test(y_pred_test_round, y_test_real_round)
+		err = y_pred_test_round - y_test_real_round  # same shapes, original scale
+		sys.stdout.write(f"Mean error (pred - real): {err.mean()}\n")   # should be negative if you underpredict
+
+
+		# df_res = pd.DataFrame({
+		# 	"real": y_test_real_round,
+		# 	"pred": y_pred_test_round,
+		# 	"err":  err,
+		# })
+
+		# sys.stdout.write(f'{df_res.groupby("real")["err"].mean()}\n')
 
 		#signature = infer_signature(x_test, y_pred_test)
 		model_json = trained_model.to_json()
-		#model_json = model.to_json()
 		with open("models/json_model.json", "w") as json_file:
 			json_file.write(model_json)
 		trained_model.save_weights("models/json_model.weights.h5")
 		# create plot
-		plot_path = plot_predict_vs_test(y_pred_real_test_rounded, x_test, y_test_real)
-		day_plot_path = plot_predict_vs_test_last_5th_day(y_pred_real_test_rounded, x_test, y_test_real)
+		# day_plot_path = plot_predict_vs_test_last_5th_day(y_pred_test_round, x_test, y_test_real_round, 1)
 		# log to MLflow
-		mlflow.log_artifact(plot_path, artifact_path="plots/")
+		mlflow.log_artifact(plot_path, artifact_path="plots")
 
 		context.log.info(f"Saved prediction plot to {plot_path}")
 
