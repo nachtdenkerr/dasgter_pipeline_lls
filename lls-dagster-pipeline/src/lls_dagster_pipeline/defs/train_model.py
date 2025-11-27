@@ -22,6 +22,7 @@ from sklearn.preprocessing import StandardScaler
         "train_set": AssetOut(io_manager_key="parquet_io_manager"),
         "test_set": AssetOut(io_manager_key="parquet_io_manager"),
     },
+	group_name='ml_model',
 	required_resource_keys={"lstm_config"},
 )
 def s11_split_data(context: dg.AssetExecutionContext, df: pd.DataFrame) :
@@ -47,6 +48,8 @@ def s11_split_data(context: dg.AssetExecutionContext, df: pd.DataFrame) :
         "scaler_X": AssetOut(),
         "scaler_y": AssetOut(),
     },
+	group_name='ml_model',
+
 	required_resource_keys={"lstm_config"},
 )
 def fit_scalers(train_set: pd.DataFrame):
@@ -70,6 +73,8 @@ def fit_scalers(train_set: pd.DataFrame):
         "x_train": AssetOut(io_manager_key='numpy_io_manager'),
         "y_train": AssetOut(io_manager_key='numpy_io_manager'),
     },
+	group_name='ml_model',
+
 	required_resource_keys={"lstm_config"},
 )
 def create_lstm_sequences(context: dg.AssetExecutionContext, train_set: pd.DataFrame, scaler_X, scaler_y):
@@ -91,6 +96,8 @@ def create_lstm_sequences(context: dg.AssetExecutionContext, train_set: pd.DataF
         "x_test": AssetOut(io_manager_key='numpy_io_manager'),
         "y_test": AssetOut(io_manager_key='numpy_io_manager'),
     },
+	group_name='ml_model',
+
 	required_resource_keys={"lstm_config"},
 )
 def create_lstm_test_sequences(context: dg.AssetExecutionContext, test_set: pd.DataFrame, scaler_X, scaler_y):
@@ -120,6 +127,8 @@ def weighted_mse(y_true, y_pred):
            "trained_model": AssetOut(),
            "training_history": AssetOut(),
        },
+	group_name='ml_model',
+
 	required_resource_keys={"lstm_config"},
 	can_subset=True,
 )

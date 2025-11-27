@@ -14,6 +14,7 @@ from lls_dagster_pipeline.utils.visualization import plot_predict_vs_test, plot_
 
 @dg.asset(
 	required_resource_keys={"lstm_config", "mlflow"},
+	group_name='ml_model',
 
 )
 def eval_model(context: dg.AssetExecutionContext, trained_model, training_history, x_train, y_train, x_test, y_test):
