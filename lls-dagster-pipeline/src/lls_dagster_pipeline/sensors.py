@@ -6,6 +6,7 @@ DATASET_DIR = "data/incoming"
 @sensor(
     job_name="incoming_data_job",
     default_status=DefaultSensorStatus.RUNNING,
+    minimum_interval_seconds=3000
 )
 def new_batch_sensor(context):
     """Detects NEW batch folders in data/incoming."""

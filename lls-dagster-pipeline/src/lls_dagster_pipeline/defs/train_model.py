@@ -14,7 +14,7 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
 from lls_dagster_pipeline.utils.data_sequence import create_sequence
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 # MARK: split train test data
 @multi_asset(
@@ -56,10 +56,10 @@ def fit_scalers(train_set: pd.DataFrame):
     all_cols = train_set.columns.to_list()
     not_use_cols = ['Timebin', 'Hour', 'Weekday']
     feature_cols = [c for c in all_cols if c not in not_use_cols]
-    target_col = ['2A_TotalForklifts']
+    target_col = ['2A_TotalForklifts', '2B_TotalForklifts', 'Tor2_TotalForklifts']
 
-    scaler_X = StandardScaler().fit(train_set[feature_cols])
-    scaler_y = StandardScaler().fit(train_set[target_col])
+    scaler_X = MinMaxScaler().fit(train_set[feature_cols])
+    scaler_y = MinMaxScaler().fit(train_set[target_col])
 
     joblib.dump(scaler_X, "models/scaler_X.pkl")
     joblib.dump(scaler_y, "models/scaler_y.pkl")
@@ -87,7 +87,9 @@ def create_lstm_sequences(context: dg.AssetExecutionContext, train_set: pd.DataF
 	y : np.ndarray
 		Array of shape (num_sequences,)
 	"""
-	return create_sequence(context, train_set, scaler_X, scaler_y)
+	x, y, _ = create_sequence(context, train_set, scaler_X, scaler_y)
+
+	return x, y
 
 
 # MARK: lstm test sequence
@@ -110,9 +112,12 @@ def create_lstm_test_sequences(context: dg.AssetExecutionContext, test_set: pd.D
 	y : np.ndarray
 		Array of shape (num_sequences,)
 	"""
-	return create_sequence(context, test_set,  scaler_X, scaler_y)
+	x, y, indices = create_sequence(context, test_set,  scaler_X, scaler_y)
+	pd.Series(indices).to_frame("test_indices").to_parquet("data/intermediate/test_indices.parquet")
 
-@keras.saving.register_keras_serializable()
+	return x, y
+
+@keras.saving.register_keras_serializable(package="Custom")
 def weighted_mse(y_true, y_pred):
     diff = y_pred - y_true
     under_mask = tf.cast(diff < 0, tf.float32)
@@ -142,7 +147,7 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 	random.seed(42)
 	np.random.seed(42)
 	tf.random.set_seed(42)
-
+	context.log.info(f"X train shape: {x_train.shape}")
 	lstm_params = context.resources.lstm_config
 	input_shape = (lstm_params['LSTM_WINDOW_SIZE'], x_train.shape[2])
 	model = Sequential()
@@ -152,7 +157,7 @@ def train_lstm_model(context: dg.AssetExecutionContext, x_train, y_train):
 	model.add(LSTM(32, return_sequences=False))
 	model.add(Dropout(0.2))
 	model.add(Dense(16, activation="relu"))
-	model.add(Dense(1))
+	model.add(Dense(3))
 
 	model.compile(
 		optimizer='adam',

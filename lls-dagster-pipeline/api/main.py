@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from .model_loader import load_model_and_scalers
 from pathlib import Path
 from fastapi.responses import FileResponse
-
+from src.lls_dagster_pipeline.defs.train_model import weighted_mse
 # Load model + scalers on startup
 model, scaler_x, scaler_y = load_model_and_scalers()
 
@@ -26,8 +26,16 @@ app.mount("/static", StaticFiles(directory=static_dir, html=True), name="static"
 class PredictRequest(BaseModel):
     date: str      # YYYY-MM-DD
     time: str      # HH:MM
-    area: str      # e.g., "Tor2"
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # adjust for your domain in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/", response_class=HTMLResponse)
 def root(request: Request):
@@ -36,98 +44,95 @@ def root(request: Request):
 @app.post("/predict")
 def predict(req: PredictRequest):
     """
-    Run inference on a single timestep.
+    Run inference on a single timestep for 3 zones using historical data.
     """
-    # Convert inputs to model features
-    # Example: convert date/time -> Timebin, Weekday, Hour, sin/cos features
-    # Flatten features for LSTM (single timestep)
-    # Example:
-    TARGET_COLUMNS = [
-        '15_ElectroForklift', '2A_ElectroForklift', '2B_ElectroForklift', '3B_ElectroForklift', 
-        'NearMuseum_ElectroForklift', 'Tor2_ElectroForklift', 'Tor8_ElectroForklift', 
-        '15_DieselForklift', '2A_DieselForklift', '2B_DieselForklift', '3B_DieselForklift', 
-        'NearMuseum_DieselForklift', 'Tor2_DieselForklift', 'Tor8_DieselForklift', 
-        '15_TotalForklifts', '2A_TotalForklifts', '2B_TotalForklifts', '3B_TotalForklifts', 
-        'NearMuseum_TotalForklifts', 'Tor2_TotalForklifts', 'Tor8_TotalForklifts'
-    ]
+    import pandas as pd
+    import numpy as np
 
-    # Feature columns
+    # ------------------------------
+    # Configuration
+    # ------------------------------
     FEATURE_COLUMNS = [
-        '15_ElectroForklift', '2A_ElectroForklift', '2B_ElectroForklift', 
-        '3B_ElectroForklift', 'NearMuseum_ElectroForklift', 'Tor2_ElectroForklift',
-        'Tor8_ElectroForklift',
-        '15_DieselForklift', '2A_DieselForklift', '2B_DieselForklift',
-        '3B_DieselForklift', 'NearMuseum_DieselForklift', 'Tor2_DieselForklift',
-        'Tor8_DieselForklift',
-        '15_TotalForklifts', '2A_TotalForklifts', '2B_TotalForklifts',
-        '3B_TotalForklifts', 'NearMuseum_TotalForklifts', 'Tor2_TotalForklifts',
-        'Tor8_TotalForklifts',
+        '15_ElectroForklift', '2A_ElectroForklift', '2B_ElectroForklift', '3B_ElectroForklift',
+        'NearMuseum_ElectroForklift', 'Tor2_ElectroForklift', 'Tor8_ElectroForklift',
+        '15_DieselForklift', '2A_DieselForklift', '2B_DieselForklift', '3B_DieselForklift',
+        'NearMuseum_DieselForklift', 'Tor2_DieselForklift', 'Tor8_DieselForklift',
+        '15_TotalForklifts', '2A_TotalForklifts', '2B_TotalForklifts', '3B_TotalForklifts',
+        'NearMuseum_TotalForklifts', 'Tor2_TotalForklifts', 'Tor8_TotalForklifts',
         'HourSin', 'HourCos', 'WeekdaySin', 'WeekdayCos',
-        'IsWeekend', 'IsHoliday','IsWorkingHour'
-           ]
+        'IsWeekend', 'IsHoliday', 'IsWorkingHour',
+        'forklift_lag_1', 'forklift_lag_6', 'forklift_lag_12', 'forklift_lag_36'
+    ]
+    LSTM_WINDOW_SIZE = 144
+    zone_names = ["2A", "2B", "Tor2"]  # model output order
+
+    # ------------------------------
+    # Load data
+    # ------------------------------
+    df_features = pd.read_parquet("data/intermediate/df.parquet")
+    df_features["Timebin"] = pd.to_datetime(df_features["Timebin"])
+
+    # ------------------------------
+    # Compute time-based features
+    # ------------------------------
     hour = int(req.time.split(":")[0])
     minute = int(req.time.split(":")[1])
-    timebin = hour + minute/60
-    weekday = pd.to_datetime(req.date).weekday()
+    frontend_ts = pd.to_datetime(f"{req.date} {req.time}")
+    timebin = hour + minute / 60
+    weekday = frontend_ts.weekday()
 
-    # Compute sin/cos encoding
     hour_sin = np.sin(2 * np.pi * timebin / 24)
     hour_cos = np.cos(2 * np.pi * timebin / 24)
     weekday_sin = np.sin(2 * np.pi * weekday / 7)
     weekday_cos = np.cos(2 * np.pi * weekday / 7)
     is_weekend = int(weekday >= 5)
-    is_holiday = 0  # if you have holiday calendar, implement it
+    is_holiday = 0  # implement holiday calendar if needed
+    is_working_hour = int(5 <= hour <= 17 and hour not in [9, 12])
 
-    # Combine all features into a flat list
-    features_dict = dict.fromkeys(FEATURE_COLUMNS + TARGET_COLUMNS, 0.0)
+    # ------------------------------
+    # Slice historical data
+    # ------------------------------
+    df_hist = df_features[df_features["Timebin"] < frontend_ts].copy()
+    if len(df_hist) < LSTM_WINDOW_SIZE:
+        raise ValueError(f"Not enough historical data for LSTM (needed {LSTM_WINDOW_SIZE}, got {len(df_hist)})")
 
-    # Set time-based features
-    features_dict.update({
-        'HourSin': hour_sin,
-        'HourCos': hour_cos,
-        'WeekdaySin': weekday_sin,
-        'WeekdayCos': weekday_cos,
-        'IsWeekend': is_weekend,
-        'IsHoliday': is_holiday,
-    })
-    for lag in ['forklift_lag_1', 'forklift_lag_6', 'forklift_lag_12', 'forklift_lag_36']:
-        features_dict[lag] = 0  # placeholder
-    # pseudo-code at API startup
+    # Take last LSTM_WINDOW_SIZE rows
+    df_seq = df_hist.iloc[-LSTM_WINDOW_SIZE:].copy()
 
-    parquet_path = "data/intermediate/df.parquet"
-    df_features_scaled = pd.read_parquet(parquet_path)
+    # ------------------------------
+    # Update last row with frontend time features
+    # ------------------------------
+    df_seq.iloc[-1, df_seq.columns.get_indexer(["HourSin", "HourCos", "WeekdaySin", "WeekdayCos",
+                                                "IsWeekend", "IsHoliday", "IsWorkingHour"])] = [
+        hour_sin, hour_cos, weekday_sin, weekday_cos, is_weekend, is_holiday, is_working_hour
+    ]
 
-    # Create new row with zeros for features frontend cannot provide
-    new_step_dict = {col: 0 for col in FEATURE_COLUMNS}
+    # ------------------------------
+    # Compute lag features dynamically
+    # ------------------------------
+    for lag in [1, 6, 12, 36]:
+        df_seq[f"forklift_lag_{lag}"] = df_seq["Tor2_TotalForklifts"].shift(lag)
+    df_seq.fillna(0, inplace=True)  # just in case early rows
 
-    # Fill in the features we know from frontend
-    new_step_dict.update({
-        'HourSin': hour_sin,
-        'HourCos': hour_cos,
-        'WeekdaySin': weekday_sin,
-        'WeekdayCos': weekday_cos,
-        'IsWeekend': 1 if weekday >= 5 else 0,
-        'IsWorkingHour': 1 if hour
-        # optionally fill area-specific lag or other features
-    })
+    # ------------------------------
+    # Build feature matrix
+    # ------------------------------
 
-    # Convert dict to array in same order as FEATURE_COLUMNS
-    new_step = np.array([new_step_dict[col] for col in FEATURE_COLUMNS]).reshape(1, -1)  # (1, 31)
+    X_seq = df_seq[FEATURE_COLUMNS].values  # shape (LSTM_WINDOW_SIZE, num_features)
+    X_seq_df = pd.DataFrame(X_seq, columns=FEATURE_COLUMNS)
+    X_seq_scaled = scaler_x.transform(X_seq_df).astype("float32").reshape(1, LSTM_WINDOW_SIZE, len(FEATURE_COLUMNS))
 
-    # Last 287 rows from parquet
-    sequence = df_features_scaled[FEATURE_COLUMNS].values[-287:]  # (287, 31)
-
-    # Concatenate
-    sequence = np.vstack([sequence, new_step])  # (288, 31)
-
-    # Scale
-    sequence_scaled = scaler_x.transform(sequence).reshape(1, 288, 31)
-    sequence_scaled = sequence_scaled.astype("float32")
-
+    # ------------------------------
     # Predict
-    y_scaled = model.predict(sequence_scaled)
-    y_pred_real_test = scaler_y.inverse_transform(y_scaled)
+    # ------------------------------
+    y_scaled = model.predict(X_seq_scaled)  # shape (1, 3)
+    y_pred_real = scaler_y.inverse_transform(y_scaled)  # shape (1, 3)
+    y_pred_rounded = np.rint(y_pred_real).astype(int)
+    # ------------------------------
+    # Return dict for front-end
+    # ------------------------------
+    prediction_dict = {zone: int(y_pred_rounded[0, idx]) for idx, zone in enumerate(zone_names)}
+    print(prediction_dict)
+    return {"prediction": prediction_dict}
 
-    y_pred_rounded = np.round(y_pred_real_test).astype(int)
 
-    return {"prediction": int(y_pred_rounded)}

@@ -9,7 +9,7 @@ from mlflow.models import infer_signature
 from mlflow.entities import model_registry
 from mlflow.tracking import MlflowClient
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-from lls_dagster_pipeline.utils.visualization import plot_predict_vs_test, plot_predict_vs_test_last_5th_day
+from lls_dagster_pipeline.utils.visualization import plot_predict_vs_test_zone
 #from tensorflow.keras.models import model_to_json
 
 @dg.asset(
@@ -33,60 +33,80 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		mlflow.log_param("test_size", lstm_params['test_size'])
 		scaler_X = joblib.load("models/scaler_X.pkl")
 		scaler_y = joblib.load("models/scaler_y.pkl")
-		# 2. Log training history metrics
-		if hasattr(training_history, 'history'):
-			# Log final training metrics
-			final_train_loss = training_history.history['loss'][-1]
-			final_val_loss = training_history.history['val_loss'][-1]
-			final_train_mae = training_history.history['mae'][-1]
-			final_val_mae = training_history.history['val_mae'][-1]
-			
-			mlflow.log_metric("final_train_loss", final_train_loss)
-			mlflow.log_metric("final_val_loss", final_val_loss)
-			mlflow.log_metric("final_train_mae", final_train_mae)
-			mlflow.log_metric("final_val_mae", final_val_mae)
-			
-			context.log.info(f"Training metrics - Loss: {final_train_loss:.4f}, MAE: {final_train_mae:.4f}")
-			context.log.info(f"Validation metrics - Loss: {final_val_loss:.4f}, MAE: {final_val_mae:.4f}")
-			
+	
+		# Zone names for logging
+		zone_names = ['2A', '2B', 'Tor2']
+
+		# 5. Calculate evaluation metrics for each zone
+		context.log.info("=" * 60)
+		context.log.info("CALCULATING METRICS FOR EACH ZONE:")
 		# 3. Make predictions
 		y_pred_train = trained_model.predict(x_train)
-		y_pred_test  = trained_model.predict(x_test)
+		y_pred_test = trained_model.predict(x_test)
 
-		y_pred_train_real = scaler_y.inverse_transform(y_pred_train)
-		y_pred_test_real  = scaler_y.inverse_transform(y_pred_test)
-
-		y_pred_train_round = np.rint(np.clip(y_pred_train_real, 0, None)).astype(int)
-		y_pred_test_round  = np.rint(np.clip(y_pred_test_real,  0, None)).astype(int)
-
-		y_test_real = scaler_y.inverse_transform(y_test)
-		y_test_real_round = np.rint(np.clip(y_test_real, 0, None)).astype(int)
-
-		# Clip negative predictions to 0 (can't have negative equipment count)
+		# Clip negative predictions (can't have negative equipment count)
 		y_pred_train = np.clip(y_pred_train, 0, None)
 		y_pred_test = np.clip(y_pred_test, 0, None)
 
-		# Calculate evaluation metrics
-		train_mae = mean_absolute_error(y_train, y_pred_train_round)
-		train_rmse = np.sqrt(mean_squared_error(y_train, y_pred_train_round))
-		train_r2 = r2_score(y_train, y_pred_train_round)
-		#train_da = calculate_direction_accuracy(y_train, y_pred_train)
+		# 4. Inverse transform
+		
+		# Inverse transform to get REAL values (in forklift counts)
+		y_train_real = scaler_y.inverse_transform(y_train)
+		y_test_real = scaler_y.inverse_transform(y_test)
+		y_pred_train_real = scaler_y.inverse_transform(y_pred_train)
+		y_pred_test_real = scaler_y.inverse_transform(y_pred_test)
 
-		test_mae = mean_absolute_error(y_test_real, y_pred_test_round)
-		test_rmse = np.sqrt(mean_squared_error(y_test_real, y_pred_test_round))
-		test_r2 = r2_score(y_test_real, y_pred_test_round)
-		#test_da = calculate_direction_accuracy(y_test, y_pred_test)
+		# Clip negatives (если ещё не сделали)
+		y_pred_train_real = np.clip(y_pred_train_real, 0, None)
+		y_pred_test_real = np.clip(y_pred_test_real, 0, None)
+		
+		context.log.info("✅ Inverse transform completed - all values in real forklift counts")
 
-		# 5. Log evaluation metrics to MLflow
-		mlflow.log_metric("train_rmse", train_rmse)
-		mlflow.log_metric("train_mae", train_mae)
-		mlflow.log_metric("train_r2", train_r2)
-		#mlflow.log_metric("train_direction_accuracy", train_da)
-		mlflow.log_metric("test_rmse", test_rmse)
-		mlflow.log_metric("test_mae", test_mae)	
-		mlflow.log_metric("test_r2", test_r2)
-		#mlflow.log_metric("test_direction_accuracy", test_da)
+		# Convert to integer counts
+		#y_train_real_int = np.round(y_train_real).astype(int)
+		#y_test_real_int = np.round(y_test_real).astype(int)
+		#y_pred_train_real_int = np.round(y_pred_train_real).astype(int)
+		#y_pred_test_real_int = np.round(y_pred_test_real).astype(int)
 
+		y_train_real_int =y_train_real
+		y_test_real_int = y_test_real
+		y_pred_train_real_int = y_pred_train_real
+		y_pred_test_real_int =y_pred_test_real
+
+		# For each zone
+		for zone_idx, zone_name in enumerate(zone_names):
+			# Extract predictions for the specific zone
+			y_train_zone = y_train_real_int[:, zone_idx]
+			y_test_zone = y_test_real_int[:, zone_idx]
+			y_pred_train_zone = y_pred_train_real_int[:, zone_idx]
+			y_pred_test_zone = y_pred_test_real_int[:, zone_idx]
+
+			# Clip negative predictions to 0 (can't have negative equipment count)
+			y_pred_train_zone = np.clip(y_pred_train_zone, 0, None)
+			y_pred_test_zone = np.clip(y_pred_test_zone, 0, None)
+
+			# Calculate evaluation metrics
+			train_mae = mean_absolute_error(y_train_zone, y_pred_train_zone)
+			train_rmse = np.sqrt(mean_squared_error(y_train_zone, y_pred_train_zone))
+			train_r2 = r2_score(y_train_zone, y_pred_train_zone)
+			#train_da = calculate_direction_accuracy(y_train_zone, y_pred_train_zone)
+
+			test_mae = mean_absolute_error(y_test_zone, y_pred_test_zone)
+			test_rmse = np.sqrt(mean_squared_error(y_test_zone, y_pred_test_zone))
+			test_r2 = r2_score(y_test_zone, y_pred_test_zone)
+			#test_da = calculate_direction_accuracy(y_test_zone, y_pred_test_zone)
+
+			# Log evaluation metrics to MLflow
+			mlflow.log_metric(f"{zone_name}_train_rmse", train_rmse)
+			mlflow.log_metric(f"{zone_name}_train_mae", train_mae)
+			mlflow.log_metric(f"{zone_name}_train_r2", train_r2)
+			#mlflow.log_metric(f"{zone_name}_train_direction_accuracy", train_da)
+			mlflow.log_metric(f"{zone_name}_test_rmse", test_rmse)
+			mlflow.log_metric(f"{zone_name}_test_mae", test_mae)
+			mlflow.log_metric(f"{zone_name}_test_r2", test_r2)
+			plot_predict_vs_test_zone(y_pred_test_zone, y_test_real_int, zone_name)
+			#mlflow.log_artifact(plot_path, artifact_path="plots")
+	
 		# 6. Log the trained model
 		mlflow.tensorflow.log_model(
 			trained_model, 
@@ -110,52 +130,15 @@ def eval_model(context: dg.AssetExecutionContext, trained_model, training_histor
 		)
 		context.log.info("Model logged to MLflow.")
 
-		# 7. Log to console
-		context.log.info("=" * 60)
-		context.log.info("TRAIN METRICS:")
-		context.log.info(f"  MAE:  {train_mae:.4f}")
-		context.log.info(f"  RMSE: {train_rmse:.4f}")
-		context.log.info(f"  R²:   {train_r2:.4f}")
-		#context.log.info(f"  Direction Accuracy: {train_da:.4f} ({train_da*100:.2f}%)")
-		context.log.info("TEST METRICS:")
-		context.log.info(f"  MAE:  {test_mae:.4f}")
-		context.log.info(f"  RMSE: {test_rmse:.4f}")
-		context.log.info(f"  R²:   {test_r2:.4f}")
-		#context.log.info(f"  Direction Accuracy: {test_da:.4f} ({test_da*100:.2f}%)")
-		context.log.info("=" * 60)
-
-		# Also print to stdout for compatibility
-		sys.stdout.write(f"Train MAE: {train_mae:.4f}\n")
-		sys.stdout.write(f"Train RMSE: {train_rmse:.4f}\n")
-		sys.stdout.write(f"Train R2: {train_r2:.4f}\n")
-		#sys.stdout.write(f"Train Direction Accuracy: {train_da:.4f} ({train_da*100:.2f}%)\n")
-		sys.stdout.write(f"Test MAE: {test_mae:.4f}\n")
-		sys.stdout.write(f"Test RMSE: {test_rmse:.4f}\n")
-		sys.stdout.write(f"Test R2: {test_r2:.4f}\n")
-		#sys.stdout.write(f"Test Direction Accuracy: {test_da:.4f} ({test_da*100:.2f}%)\n")
-		plot_path = plot_predict_vs_test(y_pred_test_round, y_test_real_round)
-		err = y_pred_test_round - y_test_real_round  # same shapes, original scale
-		sys.stdout.write(f"Mean error (pred - real): {err.mean()}\n")   # should be negative if you underpredict
-
-
-		# df_res = pd.DataFrame({
-		# 	"real": y_test_real_round,
-		# 	"pred": y_pred_test_round,
-		# 	"err":  err,
-		# })
-
-		# sys.stdout.write(f'{df_res.groupby("real")["err"].mean()}\n')
-
-		#signature = infer_signature(x_test, y_pred_test)
 		model_json = trained_model.to_json()
 		with open("models/json_model.json", "w") as json_file:
 			json_file.write(model_json)
 		trained_model.save_weights("models/json_model.weights.h5")
 		# create plot
-		# day_plot_path = plot_predict_vs_test_last_5th_day(y_pred_test_round, x_test, y_test_real_round, 1)
+		# plot_path = plot_predict_vs_test(y_pred_test_round, x_test, y_test_real_round, 1)
 		# log to MLflow
-		mlflow.log_artifact(plot_path, artifact_path="plots")
+		#mlflow.log_artifact(plot_path, artifact_path="plots")
 
-		context.log.info(f"Saved prediction plot to {plot_path}")
+		#context.log.info(f"Saved prediction plot to {plot_path}")
 
 	context.log.info("MLflow run completed successfully.")
